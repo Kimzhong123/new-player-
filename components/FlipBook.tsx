@@ -1,30 +1,22 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, RotateCcw, List, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, List, X, Hand } from 'lucide-react';
 import { BOOK_PAGES } from '../constants';
 import BookPage from './BookPage';
-import { PageContent } from '../types';
 
 const FlipBook: React.FC = () => {
-  // Logic: "Sheets" represent a physical piece of paper.
-  // Sheet n has Front (Page 2n) and Back (Page 2n+1).
-  // CurrentSheetIndex determines which sheet is currently "flipping" or on top of the right stack.
-  // 0 means Sheet 0 is visible on right. -1 means all flipped to left.
-  
   const [currentSheetIndex, setCurrentSheetIndex] = useState(0);
   const [scale, setScale] = useState(1);
   const [isPortrait, setIsPortrait] = useState(false);
   const [isTocOpen, setIsTocOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [showHint, setShowHint] = useState(true);
   
   // Design Constants
   const PAGE_WIDTH = 1000;
   const PAGE_HEIGHT = 707;
   const TOTAL_PAGES = BOOK_PAGES.length;
-  // Calculate total sheets required
   const TOTAL_SHEETS = Math.ceil(TOTAL_PAGES / 2);
 
-  // Group pages into sheets for easier rendering
   const sheets = useMemo(() => {
     const s = [];
     for (let i = 0; i < TOTAL_SHEETS; i++) {
@@ -44,8 +36,6 @@ const FlipBook: React.FC = () => {
       const portrait = h > w;
       setIsPortrait(portrait);
 
-      // Dimensions to fit into
-      // If portrait, we conceptually swap W and H because we will rotate the container 90deg
       const targetW = portrait ? h : w;
       const targetH = portrait ? w : h;
       
@@ -53,19 +43,24 @@ const FlipBook: React.FC = () => {
       const availableW = targetW - padding;
       const availableH = targetH - padding;
       
-      // We need to fit TWO pages side by side (2 * PAGE_WIDTH)
       const fullBookWidth = PAGE_WIDTH * 2;
       
       const scaleX = availableW / fullBookWidth;
       const scaleY = availableH / PAGE_HEIGHT;
       
       const fitScale = Math.min(scaleX, scaleY);
-      setScale(fitScale * 0.95);
+      setScale(fitScale * 0.96);
     };
 
     window.addEventListener('resize', handleResize);
     handleResize();
-    return () => window.removeEventListener('resize', handleResize);
+    
+    // Hide hint after 3 seconds
+    const timer = setTimeout(() => setShowHint(false), 4000);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(timer);
+    };
   }, []);
 
   // 2. Navigation
@@ -82,39 +77,6 @@ const FlipBook: React.FC = () => {
   };
   
   const goToPage = (pageIdx: number) => {
-    // Determine which sheet contains this page
-    const sheetIdx = Math.floor(pageIdx / 2);
-    // If we want to see this page, we need to flip TO it.
-    // If page is even (Front), it will be on Right.
-    // If page is odd (Back), it will be on Left.
-    // Logic: 
-    // Target Sheet 0 -> Show Front(0), Back(1). currentSheetIndex = 0.
-    // Target Sheet 1 -> Show Front(2), Back(3). currentSheetIndex = 1.
-    // So if I click Page 2, I want Sheet 1 on Right.
-    // If I click Page 3, I want Sheet 1 on Left? No, Spread 2 is Page 2(L) - Page 3(R)? 
-    // WAIT.
-    // Spread 0: [Empty] [Page 0 Cover]
-    // Spread 1: [Page 1] [Page 2]
-    // Spread 2: [Page 3] [Page 4]
-    
-    // My Sheet Logic:
-    // Sheet 0: Front=P0, Back=P1.
-    // State 0: Sheet 0 is Right. (Visible: Front P0). Left Empty.
-    // State 1: Sheet 0 is Left. (Visible: Back P1). Sheet 1 is Right (Visible Front P2).
-    // So to see Page P (index), we need state?
-    // If P=0: State 0.
-    // If P=1: State 1.
-    // If P=2: State 1.
-    // If P=3: State 2.
-    // If P=4: State 2.
-    
-    // Formula: State = Math.ceil(P / 2) ?
-    // P=0 -> 0.
-    // P=1 -> 1. (0.5 ceil -> 1)
-    // P=2 -> 1. (1 ceil -> 1)
-    // P=3 -> 2. (1.5 ceil -> 2)
-    // P=4 -> 2.
-    
     let targetState = 0;
     if (pageIdx === 0) targetState = 0;
     else targetState = Math.ceil(pageIdx / 2);
@@ -125,51 +87,67 @@ const FlipBook: React.FC = () => {
 
   // 3. Touch / Swipe Logic
   const touchStartX = useRef<number | null>(null);
-  const touchStartY = useRef<number | null>(null); // For rotated gesture detection
+  const touchStartY = useRef<number | null>(null);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
     touchStartY.current = e.touches[0].clientY;
+    setShowHint(false);
   };
   
   const handleTouchEnd = (e: React.TouchEvent) => {
-    if (touchStartX.current === null) return;
+    if (touchStartX.current === null || touchStartY.current === null) return;
     
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
     
     let diff = 0;
     
-    // If Portrait, the app is rotated 90deg.
-    // Visual Left is Physical Top? 
-    // Rotate 90deg (Clockwise):
-    // Top -> Right. Right -> Bottom. Bottom -> Left. Left -> Top.
-    // Wait, CSS `rotate(90deg)` turns the element clockwise.
-    // Visual "Left" corresponds to Physical "Bottom" relative to original?
-    // Let's rely on simple X/Y axis in the *visual* space.
-    // But touches are reported in screen coordinates.
-    
     if (isPortrait) {
-        // App is rotated 90deg clockwise.
-        // User swipes "Left" (physically left on screen, X axis decreases).
-        // Visually, that is "Up" on the book spine? No.
-        // If I hold phone upright:
-        // Book spine is horizontal.
-        // I want to swipe "Left" (Screen X) to go next page?
-        // No, if text is sideways, I rotate the phone.
-        // If I rotate the phone, browser reports Landscape (w > h). `isPortrait` becomes false.
-        // So `isPortrait` is ONLY true if user refuses to rotate phone or has lock on.
-        // In that case, they are looking at sideways text.
-        // To flip a "sideways" page "left", they would physically swipe "Up" (if top is left) or "Down"?
-        // Let's assume most users rotate. 
-        // If they don't, standard X swipe is fine, it just feels weird.
-        diff = touchStartX.current - endX;
+        // When rotated 90deg (Portrait phone):
+        // Visual "Right" is Screen "Top" (Y=0)
+        // Visual "Left" is Screen "Bottom" (Y=MAX)
+        // To go NEXT (Flip Right to Left), user gestures Top -> Bottom on screen.
+        // Screen Y increases.
+        // Diff = StartY - EndY.
+        // Top(0) - Bottom(500) = -500.
+        // So negative diff is NEXT.
+        
+        const diffY = touchStartY.current - endY;
+        diff = diffY; 
     } else {
-        diff = touchStartX.current - endX;
+        // Standard Landscape
+        const diffX = touchStartX.current - endX;
+        diff = diffX;
     }
 
-    if (diff > 50) nextSpread();
-    if (diff < -50) prevSpread();
+    // Threshold for swipe
+    if (diff > 50) nextSpread();      // Swipe Left (or Up-ish relative to book?) Wait.
+    // If standard: Swipe Left (Start > End) -> Diff + -> Next Page. Correct.
+    // If portrait: Start(Top) < End(Bottom) -> Diff - -> Prev Page?
+    // Let's re-verify portrait logic.
+    // We want content to move Right -> Left.
+    // User puts finger on "Right" (Top of phone) and drags to "Left" (Bottom of phone).
+    // Finger moves Down. EndY > StartY. Diff (Start - End) is Negative.
+    // So if Diff < -50, that is a "Next Page" gesture in Portrait?
+    // Let's check typical UX.
+    // Usually "Swipe Left" means "Next".
+    // Visual "Left" is Bottom.
+    // So drag towards Bottom.
+    // Yes, Diff Negative should be Next.
+    
+    // Correcting Logic for Portrait:
+    if (isPortrait) {
+       // Drag Down (Top -> Bottom) = Next Page
+       if (diff < -50) nextSpread();
+       // Drag Up (Bottom -> Top) = Prev Page
+       if (diff > 50) prevSpread();
+    } else {
+       // Drag Left = Next Page
+       if (diff > 50) nextSpread();
+       // Drag Right = Prev Page
+       if (diff < -50) prevSpread();
+    }
     
     touchStartX.current = null;
     touchStartY.current = null;
@@ -207,34 +185,25 @@ const FlipBook: React.FC = () => {
                 <div className="absolute left-1/2 top-0 bottom-0 w-[1px] bg-black/10 z-0"></div>
 
                 <div className="relative w-full h-full preserve-3d">
-                    {/* Render Sheets */}
                     {sheets.map((sheet, index) => {
-                        // Z-Index Logic
-                        // Sheets < current (Left stack): Higher index = Higher Z (Page 1 is top of left stack)
-                        // Sheets >= current (Right stack): Lower index = Higher Z (Page 2 is top of right stack)
-                        
                         let zIndex = 0;
                         if (index < currentSheetIndex) {
-                            // Left side: index 0 is bottom, index (current-1) is top.
                             zIndex = index;
                         } else {
-                            // Right side: index current is top, index max is bottom.
                             zIndex = TOTAL_SHEETS - index; 
                         }
 
-                        // Rotation Logic
-                        // If index < current, it is flipped (-180deg)
                         const isFlipped = index < currentSheetIndex;
                         const rotation = isFlipped ? -180 : 0;
 
                         return (
                             <div 
                                 key={index}
-                                className="absolute top-0 left-1/2 w-[1000px] h-[707px] origin-left transition-transform duration-700 ease-in-out preserve-3d shadow-xl"
+                                className="absolute top-0 left-1/2 w-[1000px] h-[707px] origin-left transition-transform duration-700 ease-in-out preserve-3d shadow-2xl"
                                 style={{ 
                                     transform: `rotateY(${rotation}deg)`,
                                     zIndex: zIndex,
-                                    marginLeft: '0px' // Origin is left edge, so it sits on the right half by default
+                                    marginLeft: '0px'
                                 }}
                             >
                                 {/* FRONT FACE (Right Page) */}
@@ -242,19 +211,13 @@ const FlipBook: React.FC = () => {
                                     className="absolute inset-0 backface-hidden bg-white overflow-hidden" 
                                     style={{ backfaceVisibility: 'hidden' }}
                                 >
-                                    {/* Page Content */}
                                     {sheet.front ? (
                                         <BookPage content={sheet.front} pageIndex={index * 2} />
                                     ) : (
-                                        <div className="w-full h-full bg-white"></div> // Empty white page
+                                        <div className="w-full h-full bg-white"></div>
                                     )}
-                                    
-                                    {/* Shadow Gradient for folding realism */}
-                                    {/* When flipped (on left), this face is hidden. When on right, we might want shadow near spine. */}
-                                    <div className="absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-black/10 to-transparent pointer-events-none"></div>
-                                    
-                                    {/* Darken when flipping to left */}
-                                    <div className={`absolute inset-0 bg-black pointer-events-none transition-opacity duration-700 ${isFlipped ? 'opacity-50' : 'opacity-0'}`}></div>
+                                    <div className="absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-black/20 to-transparent pointer-events-none"></div>
+                                    <div className={`absolute inset-0 bg-black pointer-events-none transition-opacity duration-700 ${isFlipped ? 'opacity-40' : 'opacity-0'}`}></div>
                                 </div>
 
                                 {/* BACK FACE (Left Page) */}
@@ -265,18 +228,13 @@ const FlipBook: React.FC = () => {
                                         backfaceVisibility: 'hidden' 
                                     }}
                                 >
-                                    {/* Page Content */}
                                     {sheet.back ? (
                                         <BookPage content={sheet.back} pageIndex={index * 2 + 1} />
                                     ) : (
                                         <div className="w-full h-full bg-white"></div>
                                     )}
-
-                                    {/* Shadow Gradient for spine */}
-                                    <div className="absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-black/10 to-transparent pointer-events-none"></div>
-
-                                    {/* Darken when sitting on right stack (unflipped) */}
-                                    <div className={`absolute inset-0 bg-black pointer-events-none transition-opacity duration-700 ${!isFlipped ? 'opacity-50' : 'opacity-0'}`}></div>
+                                    <div className="absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-black/20 to-transparent pointer-events-none"></div>
+                                    <div className={`absolute inset-0 bg-black pointer-events-none transition-opacity duration-700 ${!isFlipped ? 'opacity-40' : 'opacity-0'}`}></div>
                                 </div>
                             </div>
                         );
@@ -285,6 +243,18 @@ const FlipBook: React.FC = () => {
             </div>
         </div>
       </div>
+      
+      {/* Gesture Hint Overlay */}
+      {showHint && (
+        <div className={`fixed inset-0 pointer-events-none z-40 flex items-center justify-center transition-opacity duration-500 ${isPortrait ? 'rotate-90' : ''}`}>
+           <div className="bg-black/60 text-white px-6 py-4 rounded-full flex items-center gap-4 backdrop-blur-md animate-pulse">
+               <Hand className="animate-bounce" />
+               <span className="text-sm font-bold tracking-widest">
+                   {isPortrait ? "SWIPE DOWN TO FLIP" : "SWIPE LEFT TO FLIP"}
+               </span>
+           </div>
+        </div>
+      )}
 
       {/* Control Bar */}
       <div 
